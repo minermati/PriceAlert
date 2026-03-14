@@ -1,14 +1,16 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import Column, Integer, String, Float
 from pydantic import BaseModel
 from typing import List, Optional
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
-from starlette.middleware.cors import CORSMiddleware
+from datetime import datetime, timedelta
+
 from starlette.responses import FileResponse
 
-# Importy naszych modułów
+# Importy Twoich zewnętrznych modułów
 from database import SessionLocal, engine, Base
 from scraper import get_price
 from notifier import send_discord_notification
@@ -26,7 +28,7 @@ class ProductDB(Base):
     current_price = Column(Float, nullable=True)
 
 
-# Tworzymy tabele w pliku tracker.db przy starcie
+# Tworzymy tabele w bazie przy starcie
 Base.metadata.create_all(bind=engine)
 
 
@@ -69,10 +71,8 @@ def update_all_prices():
             new_price = get_price(product.url)
 
             if new_price is not None:
-                # LOGIKA POWIADOMIEŃ:
-                # Jeśli nowa cena jest niższa lub równa docelowej...
+                # LOGIKA POWIADOMIEŃ
                 if new_price <= product.target_price:
-                    # ...i jest niższa niż to co mieliśmy zapisane (żeby nie spamować co minutę tą samą ceną)
                     if product.current_price is None or new_price < product.current_price:
                         print(f"[Scheduler] ALERT! Cena spadła dla ID {product.id}. Wysyłam Discorda...")
                         send_discord_notification(product.url, new_price, product.target_price)
@@ -82,8 +82,7 @@ def update_all_prices():
                 db.commit()
                 print(f"[Scheduler] Sukces! Nowa cena dla ID {product.id}: {new_price} PLN")
             else:
-                print(
-                    f"[Scheduler] Nie udało się pobrać ceny dla ID {product.id} (Sklep zablokował bota lub zmienił layout)")
+                print(f"[Scheduler] Nie udało się pobrać ceny dla ID {product.id}")
 
         print("=" * 50)
         print("[Scheduler] ZAKOŃCZONO CYKL SPRAWDZANIA.\n")
@@ -94,48 +93,45 @@ def update_all_prices():
 
 
 # ---------------------------------------------------------
-# 4. CYKL ŻYCIA APLIKACJI (Lifespan)
+# 4. CYKL ŻYCIA APLIKACJI I SCHEDULER
 # ---------------------------------------------------------
+# Globalna instancja schedulera
+scheduler = BackgroundScheduler()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Kod tutaj wykonuje się raz przy starcie apki
-    scheduler = BackgroundScheduler()
-
-    # Zadanie ustawione na 1 minutę do celów testowych.
-    # Dla bezpieczeństwa (żeby nie dostać bana) zmień potem na hours=6 lub hours=12
-    scheduler.add_job(update_all_prices, trigger="interval", hours=1)
-
+    # Nadajemy zadaniu konkretne ID: "sync_job"
+    scheduler.add_job(update_all_prices, trigger="interval", hours=1, id="sync_job")
     scheduler.start()
     print(">>> Harmonogram zadań aktywny (co 1 h) <<<")
 
-    yield  # Tutaj aplikacja "żyje"
+    yield  # Tutaj aplikacja "żyje" i odbiera żądania API
 
-    # Kod tutaj wykonuje się przy zamykaniu apki (Ctrl+C)
     scheduler.shutdown()
     print(">>> Harmonogram zadań wyłączony <<<")
 
 
 # ---------------------------------------------------------
-# 5. INICJALIZACJA I ENDPOINTY API
+# 5. INICJALIZACJA APLIKACJI I CORS
 # ---------------------------------------------------------
-# ... Twoja inicjalizacja aplikacji
 app = FastAPI(
     title="Price Tracker Bot",
     description="Aplikacja śledząca ceny z powiadomieniami na Discord",
     lifespan=lifespan
 )
 
-# DODAJ TEN BLOK KODU ZARAZ POD INICJALIZACJĄ app:
+# CORS - Zezwala frontendowi (nawet z pliku lokalnego) na odpytywanie API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Pozwala na zapytania z dowolnego źródła (na czas dewelopmentu)
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Pozwala na wszystkie metody (GET, POST, DELETE itd.)
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# Pomocnicza funkcja do bazy danych
+# Pomocnicza funkcja dla wstrzykiwania bazy danych
 def get_db():
     db = SessionLocal()
     try:
@@ -144,16 +140,17 @@ def get_db():
         db.close()
 
 
+# ---------------------------------------------------------
+# 6. ENDPOINTY API (Produkty)
+# ---------------------------------------------------------
 @app.get("/", tags=["General"])
 def read_root():
     return FileResponse("./index.html")
 
 @app.post("/products", response_model=ProductResponse, tags=["Products"])
 def add_product(product: ProductCreate, db: Session = Depends(get_db)):
-    """Dodaje nowy produkt i od razu próbuje pobrać jego cenę."""
     print(f"[API] Dodaję nowy produkt: {product.url}")
 
-    # Sprawdzamy cenę od razu przy dodawaniu
     initial_price = get_price(product.url)
 
     new_product = ProductDB(
@@ -166,7 +163,6 @@ def add_product(product: ProductCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_product)
 
-    # Jeśli od razu przy dodaniu cena jest niska, wyślij powiadomienie
     if initial_price and initial_price <= product.target_price:
         send_discord_notification(product.url, initial_price, product.target_price)
 
@@ -175,16 +171,45 @@ def add_product(product: ProductCreate, db: Session = Depends(get_db)):
 
 @app.get("/products", response_model=List[ProductResponse], tags=["Products"])
 def list_products(db: Session = Depends(get_db)):
-    """Zwraca listę wszystkich śledzonych produktów."""
     return db.query(ProductDB).all()
 
 
 @app.delete("/products/{product_id}", tags=["Products"])
 def delete_product(product_id: int, db: Session = Depends(get_db)):
-    """Usuwa produkt z bazy danych."""
     db_product = db.query(ProductDB).filter(ProductDB.id == product_id).first()
     if not db_product:
         raise HTTPException(status_code=404, detail="Produkt nie istnieje")
     db.delete(db_product)
     db.commit()
     return {"message": f"Produkt o ID {product_id} został usunięty."}
+
+
+# ---------------------------------------------------------
+# 7. ENDPOINTY SYSTEMOWE (Odliczanie i ręczne skanowanie)
+# ---------------------------------------------------------
+@app.get("/system/status", tags=["System"])
+def get_system_status():
+    """Zwraca dokładną datę i czas kolejnego uruchomienia schedulera."""
+    job = scheduler.get_job("sync_job")
+    if job and job.next_run_time:
+        return {"next_run_time": job.next_run_time.isoformat()}
+    return {"next_run_time": None}
+
+
+@app.post("/system/scrape-now", tags=["System"])
+def trigger_scrape_now(background_tasks: BackgroundTasks):
+    """
+    Ręcznie wymusza proces sprawdzania cen w tle.
+    Resetuje harmonogram schedulera, żeby nie dublować skanowań.
+    """
+    # 1. Dodajemy skanowanie w tle
+    background_tasks.add_task(update_all_prices)
+
+    # 2. Przesuwamy czas następnego skanowania na za 1h
+    job = scheduler.get_job("sync_job")
+    if job and job.next_run_time:
+        next_run = datetime.now(job.next_run_time.tzinfo) + timedelta(hours=1)
+        # TUTAJ JEST ZMIANA: używamy modify_job zamiast reschedule_job
+        scheduler.modify_job("sync_job", next_run_time=next_run)
+
+    return {"message": "Rozpoczęto ręczne sprawdzanie cen w tle."}

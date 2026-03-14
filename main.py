@@ -5,7 +5,7 @@ from sqlalchemy import Column, Integer, String, Float
 from pydantic import BaseModel
 from typing import List, Optional
 from contextlib import asynccontextmanager
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
 
 from starlette.responses import FileResponse
@@ -52,7 +52,7 @@ class ProductResponse(BaseModel):
 # ---------------------------------------------------------
 # 3. LOGIKA SCHEDULERA (Zadanie w tle)
 # ---------------------------------------------------------
-def update_all_prices():
+async def update_all_prices():
     """Funkcja budząca się co określony czas, by sprawdzić ceny."""
     print("\n" + "=" * 50)
     print("[Scheduler] ROZPOCZYNAM CYKLICZNE SPRAWDZANIE CEN...")
@@ -68,7 +68,7 @@ def update_all_prices():
 
         for product in products:
             print(f"[Scheduler] Sprawdzam: {product.url}")
-            new_price = get_price(product.url)
+            new_price = await get_price(product.url)
 
             if new_price is not None:
                 # LOGIKA POWIADOMIEŃ
@@ -96,8 +96,7 @@ def update_all_prices():
 # 4. CYKL ŻYCIA APLIKACJI I SCHEDULER
 # ---------------------------------------------------------
 # Globalna instancja schedulera
-scheduler = BackgroundScheduler()
-
+scheduler = AsyncIOScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -148,10 +147,10 @@ def read_root():
     return FileResponse("./index.html")
 
 @app.post("/products", response_model=ProductResponse, tags=["Products"])
-def add_product(product: ProductCreate, db: Session = Depends(get_db)):
+async def add_product(product: ProductCreate, db: Session = Depends(get_db)):
     print(f"[API] Dodaję nowy produkt: {product.url}")
 
-    initial_price = get_price(product.url)
+    initial_price = await get_price(product.url)
 
     new_product = ProductDB(
         url=product.url,

@@ -1,13 +1,11 @@
-import json
-
+import asyncio
 import cloudscraper
 from bs4 import BeautifulSoup
 import re
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
 
 def extract_number(price_str: str) -> float:
-    # Ta funkcja zostaje DOKŁADNIE taka sama jak była
     if not price_str:
         return None
     price_str = price_str.lower().replace('zł', '').replace('pln', '').replace(' ', '').replace('\xa0', '')
@@ -18,95 +16,76 @@ def extract_number(price_str: str) -> float:
     return None
 
 
-def get_price(url: str) -> float:
-    print(f"Uruchamiam przeglądarkę dla: {url}")
-
-    html_content = ""
+# Funkcja synchroniczna dla Cloudscrapera - zostanie uruchomiona w osobnym wątku
+def fetch_superpharm_sync(url: str) -> float:
+    print(f"[Scraper] Próbuję obejść Cloudflare dla: {url}")
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
 
     try:
-        # Uruchamiamy Playwright
-        with sync_playwright() as p:
-            # Otwieramy przeglądarkę w trybie "headless" (bez pokazywania okna)
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+        response = scraper.get(url, timeout=15)
+        if response.status_code != 200:
+            print(f"[Scraper] Błąd Cloudflare! Status: {response.status_code} dla {url}")
+            return None
 
-            # Wchodzimy na stronę i czekamy aż cała się załaduje (w tym skrypty JS)
-            page.goto(url, wait_until="networkidle", timeout=15000)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        meta_price = soup.find('meta', attrs={'property': 'product:price:amount'})
 
-            # Pobieramy pełny, wyrenderowany przez przeglądarkę kod HTML
-            html_content = page.content()
-
-            # Zamykamy przeglądarkę
-            browser.close()
+        if meta_price and meta_price.get('content'):
+            return float(meta_price['content'])
 
     except Exception as e:
-        print(f"Błąd Playwright: {e}")
+        print(f"[Scraper] Błąd Super-Pharm dla {url}: {e}")
+
+    return None
+
+
+async def get_price(url: str) -> float:
+    print(f"Rozpoczynam pobieranie dla: {url}")
+
+    # 1. Logika SUPER-PHARM (uruchamiana bez Playwrighta)
+    if "superpharm.pl" in url:
+        # Ponieważ cloudscraper jest synchroniczny, odpalamy go w tle, by nie blokował pętli asyncio
+        return await asyncio.to_thread(fetch_superpharm_sync, url)
+
+    # 2. Logika dla X-KOM i reszty (używamy asynchronicznego Playwrighta)
+    html_content = ""
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(url, wait_until="networkidle", timeout=15000)
+            html_content = await page.content()
+            await browser.close()
+    except Exception as e:
+        print(f"Błąd Playwright dla {url}: {e}")
         return None
 
-    # Teraz przekazujemy ten wyrenderowany HTML do naszego starego dobrego BeautifulSoup
-    soup = BeautifulSoup(html_content, 'html.parser')
-    # ---------------------------------------------------------
-    # SUPER-PODEJŚCIE DLA X-KOM (Dane z ukrytego JSON-a)
-    # ---------------------------------------------------------
+    # SUPER-PODEJŚCIE DLA X-KOM
     if "x-kom.pl" in url:
-        # Szukamy w całym surowym kodzie HTML wzorca: "priceInfo":{"price":2899
-        # (.*?) pozwala ominąć ewentualne spacje, a ([0-9.]+) wyłapuje samą liczbę
         match = re.search(r'"priceInfo"\s*:\s*\{\s*"price"\s*:\s*([0-9.]+)', html_content)
-
         if match:
-            # match.group(1) to nasza wyłapana liczba w nawiasie
             cena = float(match.group(1))
-            print(f"BINGO! Znaleziono cenę X-kom w ukrytym obiekcie danych: {cena}")
+            print(f"BINGO! Znaleziono cenę X-kom ({url}): {cena}")
             return cena
+        print(f"Nie mogłem znaleźć obiektu priceInfo w x-kom: {url}")
 
-        print("Nie mogłem znaleźć obiektu priceInfo w kodzie x-komu.")
-    # 3. Logika SUPER-PHARM
-    elif "superpharm.pl" in url:
-            print(f"[Scraper] Próbuję obejść Cloudflare dla: {url}")
+    # Ogólny parsing HTML dla innych sklepów z Playwrighta
+    soup = BeautifulSoup(html_content, 'html.parser')
 
-            # Tworzymy scraper, który udaje Chrome'a na Windowsie
-            scraper = cloudscraper.create_scraper(
-                browser={
-                    'browser': 'chrome',
-                    'platform': 'windows',
-                    'desktop': True
-                }
-            )
-
-            try:
-                # Pobieramy stronę
-                response = scraper.get(url, timeout=15)
-
-                # Jeśli Cloudflare znowu nas zablokuje, status to zazwyczaj 403
-                if response.status_code != 200:
-                    print(f"[Scraper] Błąd Cloudflare! Status: {response.status_code}")
-                    return None
-
-                soup = BeautifulSoup(response.text, 'html.parser')
-                print(soup)
-                # Używamy naszego złotego meta tagu
-                meta_price = soup.find('meta', attrs={'property': 'product:price:amount'})
-
-                if meta_price and meta_price.get('content'):
-                    return float(meta_price['content'])
-
-            except Exception as e:
-                print(f"[Scraper] Błąd Super-Pharm: {e}")
-
-            return None
-    # ---------------------------------------------------------
-    # Próba ogólna (Open Graph) - np. dla mniejszych sklepów
-    # ---------------------------------------------------------
     meta_price = soup.find('meta', property='product:price:amount')
     if meta_price and meta_price.get('content'):
         return extract_number(meta_price['content'])
 
-    # ---------------------------------------------------------
-    # Strzał w ciemno
-    # ---------------------------------------------------------
     fallback_price = soup.find(class_=re.compile("price", re.I))
     if fallback_price:
         return extract_number(fallback_price.text)
 
-    print("Strona się załadowała, ale nie mogłem znaleźć elementu z ceną.")
+    print(f"Strona się załadowała, ale brak ceny dla: {url}")
     return None
+

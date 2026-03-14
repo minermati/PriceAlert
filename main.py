@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import FileResponse
 
 # Importy naszych modułów
 from database import SessionLocal, engine, Base
@@ -116,10 +118,20 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------
 # 5. INICJALIZACJA I ENDPOINTY API
 # ---------------------------------------------------------
+# ... Twoja inicjalizacja aplikacji
 app = FastAPI(
     title="Price Tracker Bot",
     description="Aplikacja śledząca ceny z powiadomieniami na Discord",
     lifespan=lifespan
+)
+
+# DODAJ TEN BLOK KODU ZARAZ POD INICJALIZACJĄ app:
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Pozwala na zapytania z dowolnego źródła (na czas dewelopmentu)
+    allow_credentials=True,
+    allow_methods=["*"],  # Pozwala na wszystkie metody (GET, POST, DELETE itd.)
+    allow_headers=["*"],
 )
 
 
@@ -134,8 +146,7 @@ def get_db():
 
 @app.get("/", tags=["General"])
 def read_root():
-    return {"status": "online", "message": "Bot pracuje w tle. Przejdź do /docs aby zarządzać produktami."}
-
+    return FileResponse("./index.html")
 
 @app.post("/products", response_model=ProductResponse, tags=["Products"])
 def add_product(product: ProductCreate, db: Session = Depends(get_db)):

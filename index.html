@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Tracker Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen">
+
+    <nav class="bg-white shadow-sm mb-8">
+        <div class="max-w-5xl mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-indigo-600">
+                <i class="fa-solid fa-chart-line mr-2"></i>PriceTracker
+            </h1>
+            <div id="status-badge" class="px-3 py-1 rounded-full bg-yellow-100 text-yellow-700 text-sm font-semibold flex items-center">
+                <div class="w-2 h-2 bg-yellow-500 rounded-full mr-2 animate-pulse"></div>
+                Łączenie z API...
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-5xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">
+
+        <div class="md:col-span-1">
+            <div class="bg-white rounded-xl shadow-md p-6 sticky top-6">
+                <h2 class="text-lg font-bold mb-4 border-b pb-2">Dodaj nowy produkt</h2>
+                <form id="add-product-form" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Link do produktu (URL)</label>
+                        <input type="url" id="product-url" required placeholder="https://sklep.pl/produkt"
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Cena docelowa (PLN)</label>
+                        <input type="number" id="target-price" required step="0.01" min="0" placeholder="np. 199.99"
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+                    </div>
+                    <button type="submit" id="submit-btn"
+                            class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-4 rounded-lg transition duration-200 flex justify-center items-center">
+                        <i class="fa-solid fa-plus mr-2"></i> Dodaj do śledzenia
+                    </button>
+                </form>
+                <div id="form-message" class="mt-4 text-sm text-center hidden"></div>
+            </div>
+        </div>
+
+        <div class="md:col-span-2">
+            <h2 class="text-xl font-bold mb-4 flex items-center justify-between">
+                <span>Śledzone produkty</span>
+                <button onclick="fetchProducts()" class="text-sm bg-slate-200 hover:bg-slate-300 text-slate-700 py-1 px-3 rounded transition">
+                    <i class="fa-solid fa-rotate-right mr-1"></i> Odśwież
+                </button>
+            </h2>
+
+            <div id="products-container" class="space-y-4">
+                <div class="text-center text-gray-500 py-8">Ładowanie produktów...</div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // ADRES TWOJEGO API (domyślnie FastAPI działa na porcie 8000)
+        const API_URL = 'http://127.0.0.1:8000';
+
+        // Funkcje UI
+        const statusBadge = document.getElementById('status-badge');
+        const productsContainer = document.getElementById('products-container');
+        const form = document.getElementById('add-product-form');
+        const submitBtn = document.getElementById('submit-btn');
+        const formMessage = document.getElementById('form-message');
+
+        // Ustawienie statusu połączenia
+        function setApiStatus(isOnline) {
+            if (isOnline) {
+                statusBadge.className = 'px-3 py-1 rounded-full bg-green-100 text-green-700 text-sm font-semibold flex items-center';
+                statusBadge.innerHTML = '<div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div> API Online';
+            } else {
+                statusBadge.className = 'px-3 py-1 rounded-full bg-red-100 text-red-700 text-sm font-semibold flex items-center';
+                statusBadge.innerHTML = '<div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div> API Offline';
+            }
+        }
+
+        // Pobieranie produktów z API
+        async function fetchProducts() {
+            try {
+                const response = await fetch(`${API_URL}/products`);
+                if (!response.ok) throw new Error('Błąd sieci');
+
+                const products = await response.json();
+                setApiStatus(true);
+                renderProducts(products);
+            } catch (error) {
+                console.error("Błąd pobierania:", error);
+                setApiStatus(false);
+                productsContainer.innerHTML = `
+                    <div class="bg-red-50 text-red-600 p-4 rounded-xl border border-red-200 text-center">
+                        Nie udało się połączyć z API. Upewnij się, że serwer FastAPI jest uruchomiony na ${API_URL} i ma włączony CORS.
+                    </div>`;
+            }
+        }
+
+        // Renderowanie kart produktów
+        function renderProducts(products) {
+            if (products.length === 0) {
+                productsContainer.innerHTML = `
+                    <div class="bg-white p-8 rounded-xl border border-gray-200 text-center text-gray-500 shadow-sm">
+                        <i class="fa-solid fa-box-open text-4xl mb-3 text-gray-300"></i>
+                        <p>Brak śledzonych produktów. Dodaj swój pierwszy link!</p>
+                    </div>`;
+                return;
+            }
+
+            productsContainer.innerHTML = '';
+            products.forEach(product => {
+                const isTargetMet = product.current_price !== null && product.current_price <= product.target_price;
+                const priceColor = isTargetMet ? 'text-green-600' : 'text-slate-800';
+                const priceBg = isTargetMet ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200';
+
+                // Formatyzacja url dla estetyki (pokazuje tylko domenę i kawałek ścieżki)
+                let displayUrl = product.url;
+                try {
+                    const urlObj = new URL(product.url);
+                    displayUrl = urlObj.hostname + (urlObj.pathname.length > 20 ? urlObj.pathname.substring(0, 20) + '...' : urlObj.pathname);
+                } catch(e) {}
+
+                const card = document.createElement('div');
+                card.className = "bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4";
+
+                card.innerHTML = `
+                    <div class="flex-1 overflow-hidden">
+                        <a href="${product.url}" target="_blank" class="text-indigo-600 hover:text-indigo-800 font-medium truncate block mb-1" title="${product.url}">
+                            <i class="fa-solid fa-link text-xs mr-1"></i> ${displayUrl}
+                        </a>
+                        <div class="text-sm text-gray-500 flex items-center gap-4">
+                            <span>ID: #${product.id}</span>
+                            <span>Cel: <strong class="text-gray-700">${product.target_price.toFixed(2)} PLN</strong></span>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4 w-full sm:w-auto">
+                        <div class="px-4 py-2 rounded-lg border ${priceBg} flex flex-col items-end min-w-[120px]">
+                            <span class="text-xs text-gray-500 font-medium uppercase tracking-wider">Obecna cena</span>
+                            <span class="text-lg font-bold ${priceColor}">
+                                ${product.current_price !== null ? product.current_price.toFixed(2) + ' PLN' : '<span class="text-sm text-gray-400">Brak danych</span>'}
+                            </span>
+                        </div>
+
+                        <button onclick="deleteProduct(${product.id})" class="text-gray-400 hover:text-red-500 p-2 transition" title="Usuń produkt">
+                            <i class="fa-solid fa-trash-can text-xl"></i>
+                        </button>
+                    </div>
+                `;
+                productsContainer.appendChild(card);
+            });
+        }
+
+        // Dodawanie produktu
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const urlInput = document.getElementById('product-url').value;
+            const targetPriceInput = parseFloat(document.getElementById('target-price').value);
+
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Dodawanie...';
+
+            try {
+                const response = await fetch(`${API_URL}/products`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: urlInput,
+                        target_price: targetPriceInput
+                    })
+                });
+
+                if (!response.ok) throw new Error('Błąd dodawania produktu');
+
+                // Sukces
+                form.reset();
+                showMessage('Produkt dodany pomyślnie!', 'success');
+                fetchProducts(); // Odśwież listę
+
+            } catch (error) {
+                console.error(error);
+                showMessage('Wystąpił błąd podczas dodawania.', 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fa-solid fa-plus mr-2"></i> Dodaj do śledzenia';
+            }
+        });
+
+        // Usuwanie produktu
+        async function deleteProduct(id) {
+            if (!confirm('Czy na pewno chcesz usunąć ten produkt z monitorowania?')) return;
+
+            try {
+                const response = await fetch(`${API_URL}/products/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) throw new Error('Błąd usuwania');
+                fetchProducts(); // Odśwież po usunięciu
+            } catch (error) {
+                alert('Nie udało się usunąć produktu.');
+                console.error(error);
+            }
+        }
+
+        // Pomocnicza do pokazywania wiadomości w formularzu
+        function showMessage(text, type) {
+            formMessage.textContent = text;
+            formMessage.className = `mt-4 text-sm text-center font-medium p-2 rounded ${type === 'success' ? 'text-green-700 bg-green-50' : 'text-red-700 bg-red-50'}`;
+            formMessage.classList.remove('hidden');
+            setTimeout(() => formMessage.classList.add('hidden'), 4000);
+        }
+
+        // Uruchom pobieranie na start
+        fetchProducts();
+    </script>
+</body>
+</html>

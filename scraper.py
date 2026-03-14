@@ -1,5 +1,6 @@
 import json
 
+import cloudscraper
 from bs4 import BeautifulSoup
 import re
 from playwright.sync_api import sync_playwright
@@ -59,6 +60,40 @@ def get_price(url: str) -> float:
             return cena
 
         print("Nie mogłem znaleźć obiektu priceInfo w kodzie x-komu.")
+    # 3. Logika SUPER-PHARM
+    elif "superpharm.pl" in url:
+            print(f"[Scraper] Próbuję obejść Cloudflare dla: {url}")
+
+            # Tworzymy scraper, który udaje Chrome'a na Windowsie
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'desktop': True
+                }
+            )
+
+            try:
+                # Pobieramy stronę
+                response = scraper.get(url, timeout=15)
+
+                # Jeśli Cloudflare znowu nas zablokuje, status to zazwyczaj 403
+                if response.status_code != 200:
+                    print(f"[Scraper] Błąd Cloudflare! Status: {response.status_code}")
+                    return None
+
+                soup = BeautifulSoup(response.text, 'html.parser')
+                print(soup)
+                # Używamy naszego złotego meta tagu
+                meta_price = soup.find('meta', attrs={'property': 'product:price:amount'})
+
+                if meta_price and meta_price.get('content'):
+                    return float(meta_price['content'])
+
+            except Exception as e:
+                print(f"[Scraper] Błąd Super-Pharm: {e}")
+
+            return None
     # ---------------------------------------------------------
     # Próba ogólna (Open Graph) - np. dla mniejszych sklepów
     # ---------------------------------------------------------

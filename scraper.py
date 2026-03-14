@@ -44,7 +44,6 @@ def get_price(url: str) -> float:
 
     # Teraz przekazujemy ten wyrenderowany HTML do naszego starego dobrego BeautifulSoup
     soup = BeautifulSoup(html_content, 'html.parser')
-    print(html_content)
     # ---------------------------------------------------------
     # SUPER-PODEJŚCIE DLA X-KOM (Dane z ukrytego JSON-a)
     # ---------------------------------------------------------
@@ -60,43 +59,6 @@ def get_price(url: str) -> float:
             return cena
 
         print("Nie mogłem znaleźć obiektu priceInfo w kodzie x-komu.")
-    # ---------------------------------------------------------
-    # SUPER-PODEJŚCIE DLA ALLEGRO (Dane z dataLayer analityki)
-    # ---------------------------------------------------------
-    if "allegro.pl" in url:
-        print("Próbuję wyciągnąć dane z Allegro...")
-
-        # Podejście 1: dataLayer (Twój sposób!)
-        # Szukamy zmiennej dataLayer=[ ... "price":93.09 ... ]
-        # Flaga re.DOTALL sprawia, że szukamy nawet, jeśli tekst jest połamany na wiele linijek
-        match = re.search(r'dataLayer\s*=\s*\[.*?\"price\"\s*:\s*([0-9.]+)', html_content, re.DOTALL)
-
-        if match:
-            cena = float(match.group(1))
-            print(f"BINGO! Znaleziono cenę Allegro w dataLayer: {cena}")
-            return cena
-
-        # Podejście 2: JSON-LD (Zapasowe, jeśli dataLayer by zawiódł)
-        ld_json_scripts = soup.find_all('script', type='application/ld+json')
-        for script in ld_json_scripts:
-            try:
-                data = json.loads(script.text)
-                if isinstance(data, list):
-                    for item in data:
-                        if item.get('@type') == 'Product' and 'offers' in item:
-                            return extract_number(str(item['offers'].get('price')))
-                elif isinstance(data, dict):
-                    if data.get('@type') == 'Product' and 'offers' in data:
-                        offers = data['offers']
-                        if isinstance(offers, dict) and 'price' in offers:
-                            return extract_number(str(offers['price']))
-                        elif isinstance(offers, list) and len(offers) > 0:
-                            return extract_number(str(offers[0].get('price')))
-            except Exception:
-                continue
-
-        print("Nie udało się znaleźć ceny na Allegro (możliwa blokada anty-bot).")
-        return None
     # ---------------------------------------------------------
     # Próba ogólna (Open Graph) - np. dla mniejszych sklepów
     # ---------------------------------------------------------
